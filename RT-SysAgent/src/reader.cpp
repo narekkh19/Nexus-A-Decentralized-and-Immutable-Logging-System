@@ -160,9 +160,14 @@ void worker_thread(int id, QueueType* queue) {
     while (g_running) {
         RawEvent ev{};
         if (queue->dequeue(ev)) {
+            const char* event_type = "SYSTEM";
+            if (ev.type == 0) event_type = "SYSLOG";
+            else if (ev.type == 1) event_type = "USB";
+            else if (ev.type == 2) event_type = "FILE_DELETE";
+
             json log_entry = {
                 {"event_id", ev.event_id},
-                {"type", ev.type == 0 ? "SYSLOG" : ev.type == 1 ? "USB" : "SYSTEM"},
+                {"type", event_type},
                 {"message", std::string(ev.text)},
                 {"timestamp", current_timestamp()}
             };

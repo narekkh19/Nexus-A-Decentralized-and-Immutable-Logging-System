@@ -53,6 +53,13 @@ const configEditor = document.getElementById('config-editor');
 const saveConfigBtn = document.getElementById('save-config-btn');
 const refreshStatsBtn = document.getElementById('refresh-stats-btn');
 const systemStats = document.getElementById('system-stats');
+const flowResolveStep = document.getElementById('flow-step-resolve');
+const flowFetchStep = document.getElementById('flow-step-fetch');
+const flowShowStep = document.getElementById('flow-step-show');
+
+let appInitialized = false;
+let isResolving = false;
+let isFetching = false;
 
 // Tab handling
 document.querySelectorAll('.tab').forEach(tab => {
@@ -80,6 +87,20 @@ function showStatus(message, isError = false) {
     setTimeout(() => {
         status.style.display = 'none';
     }, 3000);
+}
+
+function setFlowStep(step) {
+    if (!flowResolveStep || !flowFetchStep || !flowShowStep) return;
+    [flowResolveStep, flowFetchStep, flowShowStep].forEach((el) => el.classList.remove('active'));
+    if (step === 'resolve') flowResolveStep.classList.add('active');
+    if (step === 'fetch') flowFetchStep.classList.add('active');
+    if (step === 'show') flowShowStep.classList.add('active');
+}
+
+function setButtonLoading(button, loadingText, defaultText, loading) {
+    if (!button) return;
+    button.disabled = loading;
+    button.textContent = loading ? loadingText : defaultText;
 }
 
 // Create log entry element
@@ -195,6 +216,10 @@ function showError(error) {
 
 // Resolve IPNS name
 async function resolveIpns() {
+    if (isResolving) return;
+    isResolving = true;
+    setFlowStep('resolve');
+    setButtonLoading(resolveBtn, 'RESOLVING...', 'RESOLVE IPNS', true);
     // Clear output
     logsOutput.innerHTML = '';
     logsOutput.appendChild(loading.overlay);
@@ -208,7 +233,7 @@ async function resolveIpns() {
         const response = await fetch('/api/fetch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ipnsKey: 'log-agent' })
+            body: JSON.stringify({ ipnsKey: cidInput.value.trim() || undefined })
         });
 
         // Hide loading
@@ -286,6 +311,7 @@ async function resolveIpns() {
         };
 
         showStatus('IPNS resolved successfully');
+        setFlowStep('fetch');
     } catch (error) {
         // Hide loading
         loading.hide();
@@ -313,16 +339,23 @@ async function resolveIpns() {
         logsOutput.appendChild(errorDiv);
 
         showStatus(error.message, true);
+    } finally {
+        isResolving = false;
+        setButtonLoading(resolveBtn, 'RESOLVING...', 'RESOLVE IPNS', false);
     }
 }
 
 // Fetch logs by CID
 async function fetchLogs(cid) {
+    if (isFetching) return;
     if (!cid) {
         cidInput.classList.add('error');
         showStatus('Please enter a CID', true);
         return;
     }
+    isFetching = true;
+    setFlowStep('fetch');
+    setButtonLoading(fetchBtn, 'FETCHING...', 'FETCH LOGS', true);
 
     const loadingOverlay = document.getElementById('loading-overlay');
     const loadingText = loadingOverlay.querySelector('.loading-text');
@@ -453,6 +486,7 @@ async function fetchLogs(cid) {
         }
 
         showStatus('Logs fetched successfully');
+        setFlowStep('show');
     } catch (error) {
         // Hide loading
         loadingOverlay.classList.remove('active');
@@ -470,6 +504,9 @@ async function fetchLogs(cid) {
         logsOutput.insertBefore(errorDiv, loadingOverlay);
 
         showStatus(error.message, true);
+    } finally {
+        isFetching = false;
+        setButtonLoading(fetchBtn, 'FETCHING...', 'FETCH LOGS', false);
     }
 }
 
@@ -1426,8 +1463,25 @@ async function loadSystemLogs() {
         const data = await response.json();
         
         if (data.success && Array.isArray(data.logs)) {
+            const filteredLogs = data.logs
+                .filter((log) => {
+                    const source = log.meta?.source || 'system';
+                    const msg = (log.message || '').toLowerCase();
+                    // Avoid UI noise from repetitive system telemetry/errors not useful for demos.
+                    if (source === 'system' && (
+                        msg.includes('error detecting speed for') ||
+                        msg.includes('error reading linux network stats') ||
+                        msg.includes('error reading macos network stats') ||
+                        msg.includes('error getting stats for')
+                    )) {
+                        return false;
+                    }
+                    return true;
+                })
+                .slice(0, 200);
+
             // Сортируем логи по времени (новые сверху) и добавляем только новые
-            const sortedLogs = [...data.logs].sort((a, b) => 
+            const sortedLogs = [...filteredLogs].sort((a, b) => 
                 new Date(b.timestamp) - new Date(a.timestamp)
             );
             sortedLogs.forEach(log => {
@@ -1649,12 +1703,12 @@ console.warn = (...args) => {
 
 console.info = (...args) => {
     originalConsole.info.apply(console, args);
-    if (apiHealthy) writeLog('info', args.join(' '));
+    // Intentionally do not mirror info logs to server to avoid UI log noise.
 };
 
 console.log = (...args) => {
     originalConsole.log.apply(console, args);
-    if (apiHealthy) writeLog('info', args.join(' '));
+    // Intentionally do not mirror generic logs to server to avoid UI log noise.
 };
 
 // Handle uncaught errors
@@ -1676,20 +1730,6 @@ window.addEventListener('unhandledrejection', (event) => {
 
 // Initial log
 writeLog('info', 'Web interface started');
-
-// Event listeners
-generateKeyBtn.addEventListener('click', () => {
-    const name = newKeyNameInput.value.trim();
-    if (!name) {
-        newKeyNameInput.classList.add('error');
-        showStatus('Please enter a key name', true);
-        return;
-    }
-    generateKey(name);
-});
-
-saveConfigBtn.addEventListener('click', saveConfig);
-refreshStatsBtn.addEventListener('click', loadStats);
 
 cidInput.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -1806,11 +1846,10 @@ async function initStats() {
     }
 }
 
-// Start stats loading
-initStats();
-
 // Initialize everything when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
+    if (appInitialized) return;
+    appInitialized = true;
     // UI Elements
     const cidInput = document.getElementById('cid-input');
     const fetchBtn = document.getElementById('fetch-btn');

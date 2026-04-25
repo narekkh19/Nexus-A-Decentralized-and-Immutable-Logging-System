@@ -28,13 +28,9 @@ async function loadConfig() {
 router.post('/fetch', async (req, res, next) => {
     try {
         const { cid, ipnsKey } = req.body;
-        if (!cid && !ipnsKey) {
-            return res.status(400).json({ success: false, error: 'cid or ipnsKey required' });
-        }
-
-        // For IPNS - return resolved CID
-        if (ipnsKey) {
-            const resolvedCid = await ipfsService.resolveName(ipnsKey);
+        // For IPNS resolve mode: explicit ipnsKey, or default from configured key file.
+        if (!cid) {
+            const resolvedCid = await ipfsService.resolveName((ipnsKey || '').trim());
             return res.json({ success: true, data: resolvedCid });
         }
 

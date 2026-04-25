@@ -149,29 +149,13 @@ class IpfsService {
                     peerId = peerId.trim();
                     logger.debug('Read IPNS key from file', { keyPath, operation: 'resolve' });
                 } catch (err) {
-                    logger.error('Failed to read IPNS key file', { 
-                        keyPath, 
-                        error: err.message, 
-                        operation: 'resolve' 
+                    logger.error('Failed to read IPNS key file', {
+                        keyPath,
+                        error: err.message,
+                        operation: 'resolve'
                     });
                     throw new Error(`Cannot read IPNS key file: ${keyPath}`);
                 }
-            }
-
-            // If a key name (e.g. "log-agent") is provided, resolve it to peer ID first.
-            const looksLikePeerId = peerId.startsWith('k') || peerId.startsWith('Qm');
-            if (!looksLikePeerId) {
-                const keysOutput = await this.runWithRetry(['key', 'list', '-l']);
-                const lines = keysOutput.split('\n').map(line => line.trim()).filter(Boolean);
-                const match = lines.find((line) => {
-                    const parts = line.split(/\s+/);
-                    return parts.length >= 2 && parts[parts.length - 1] === peerId;
-                });
-
-                if (!match) {
-                    throw new Error(`IPNS key "${peerId}" not found in local IPFS key list`);
-                }
-                peerId = match.split(/\s+/)[0];
             }
 
             if (!peerId) {
@@ -179,31 +163,76 @@ class IpfsService {
                 throw new Error('IPNS key file is empty');
             }
 
-            // Build resolve command
-            const args = [
+            // Normalize '/ipns/<id>' input and resolve local key names to peer IDs.
+            peerId = peerId.replace(/^\/ipns\//, '').trim();
+            if (!peerId.startsWith('k') && !peerId.startsWith('Qm')) {
+                const keyOutput = await this.runWithRetry(['key', 'list', '-l']);
+                const match = keyOutput
+                    .split('\n')
+                    .map((line) => line.trim())
+                    .filter(Boolean)
+                    .map((line) => line.split(/\s+/))
+                    .find((parts) => parts.length >= 2 && parts[parts.length - 1] === peerId);
+
+                if (match) {
+                    const resolvedPeerId = match.slice(0, -1).join(' ');
+                    logger.debug('Resolved local IPFS key name to peer ID', {
+                        keyName: peerId,
+                        resolvedPeerId,
+                        operation: 'resolve'
+                    });
+                    peerId = resolvedPeerId;
+                }
+            }
+
+            // Build base resolve command
+            const baseArgs = [
                 'name',
                 'resolve',
                 '--nocache',
                 '--timeout', this.config.name_resolve_timeout
             ];
+            const target = `/ipns/${peerId}`;
+            let result = null;
+            let offlineError = null;
 
-            // Add offline flag if needed
+            // First attempt offline when configured (fast path for local cache/local records).
             if (this.config.allow_offline) {
-                args.push('--offline');
+                const offlineArgs = [...baseArgs, '--offline', target];
+                logger.debug('Resolving IPNS name (offline attempt)', {
+                    peerId,
+                    args: offlineArgs,
+                    operation: 'resolve'
+                });
+                try {
+                    result = await this.runWithRetry(offlineArgs);
+                } catch (err) {
+                    offlineError = err;
+                    logger.warn('Offline IPNS resolve failed, retrying online', {
+                        peerId,
+                        error: err.message,
+                        operation: 'resolve'
+                    });
+                }
             }
 
-            // Add IPNS path
-            args.push(`/ipns/${peerId}`);
+            // Fallback to online resolve to retrieve remote Linux-published IPNS records.
+            if (!result && this.config.allow_online) {
+                const onlineArgs = [...baseArgs, target];
+                logger.debug('Resolving IPNS name (online attempt)', {
+                    peerId,
+                    args: onlineArgs,
+                    operation: 'resolve'
+                });
+                result = await this.runWithRetry(onlineArgs);
+            }
 
-            logger.debug('Resolving IPNS name', { 
-                peerId, 
-                args, 
-                operation: 'resolve',
-                offline: this.config.allow_offline
-            });
-
-            // Run resolve
-            const result = await this.runWithRetry(args);
+            if (!result && offlineError) {
+                throw offlineError;
+            }
+            if (!result) {
+                throw new Error('IPNS resolve disabled by configuration (both offline and online are false)');
+            }
             
             // Parse result
             const prefix = '/ipfs/';
@@ -229,6 +258,9 @@ class IpfsService {
             if (err.message.includes('no link named')) {
                 logger.warn('IPNS name not published yet', { operation: 'resolve' });
                 throw new Error('IPNS name not published yet. Please publish content first.');
+            }
+            if (err.message.includes('DNSLink lookup') && (ipnsKeyOrPeerId || '').trim()) {
+                throw new Error(`IPNS resolve failed: '${(ipnsKeyOrPeerId || '').trim()}' looks like a local key name that is not mapped to a peer ID`);
             }
             logger.error('Failed to resolve IPNS name', { 
                 error: err.message, 

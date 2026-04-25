@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <cstring>
 #include <cerrno>
+#include <filesystem>
 #include <libudev.h>
 #include <dirent.h>
 #include <systemd/sd-daemon.h>
@@ -82,6 +83,13 @@ void syslog_monitor(QueueType* queue) {
             std::string line = data.substr(pos, nl - pos);
             pos = nl + 1;
 
+            // Ignore noisy desktop tracker warnings that flood demo output.
+            if (line.find("tracker-miner-fs-3") != std::string::npos &&
+                line.find("GLib-GIO-WARNING") != std::string::npos &&
+                line.find("/proc/self/mountinfo") != std::string::npos) {
+                continue;
+            }
+
             if (!trie.parse_text(line).empty()) {
                 RawEvent ev{};
                 ev.type = 0;
@@ -149,12 +157,30 @@ void file_delete_monitor(QueueType* queue) {
 
     std::unordered_map<int, std::string> wd_to_path;
 
-    for (const auto& path : watch_paths) {
-        int wd = inotify_add_watch(inotify_fd, path.c_str(), IN_DELETE|IN_MOVED_FROM);
+    auto add_watch = [&](const std::string& dir_path) {
+        int wd = inotify_add_watch(
+            inotify_fd,
+            dir_path.c_str(),
+            IN_DELETE | IN_MOVED_FROM | IN_CREATE | IN_MOVED_TO
+        );
         if (wd >= 0) {
-            wd_to_path[wd] = path;
+            wd_to_path[wd] = dir_path;
         } else {
-            std::cerr << "Failed to watch: " << path << " (" << strerror(errno) << ")\n";
+            std::cerr << "Failed to watch: " << dir_path << " (" << strerror(errno) << ")\n";
+        }
+    };
+
+    // Add recursive watches so deletions inside subfolders are captured too.
+    for (const auto& path : watch_paths) {
+        add_watch(path);
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(path)) {
+                if (entry.is_directory()) {
+                    add_watch(entry.path().string());
+                }
+            }
+        } catch (const std::exception& ex) {
+            std::cerr << "Recursive watch scan failed for: " << path << " (" << ex.what() << ")\n";
         }
     }
 
@@ -167,29 +193,35 @@ void file_delete_monitor(QueueType* queue) {
         if (len <= 0) continue;
 
         for (ssize_t i = 0; i < len;) {
-    struct inotify_event* ev = (struct inotify_event*)&buf[i];
-    if ((ev->mask & IN_DELETE || ev->mask & IN_MOVED_FROM) && ev->len > 0) {
-        auto it = wd_to_path.find(ev->wd);
-        std::string full_path = (it != wd_to_path.end())
-            ? it->second + "/" + std::string(ev->name)
-            : std::string(ev->name);
+            struct inotify_event* ev = (struct inotify_event*)&buf[i];
+            auto it = wd_to_path.find(ev->wd);
+            std::string base_path = (it != wd_to_path.end()) ? it->second : "";
+            std::string full_path = (ev->len > 0 && !base_path.empty())
+                ? base_path + "/" + std::string(ev->name)
+                : std::string(ev->name);
 
-        std::string msg;
-        if (ev->mask & IN_DELETE) {
-            msg = "Deleted file: " + full_path;
-        } else if (ev->mask & IN_MOVED_FROM) {
-            msg = "Moved out file: " + full_path;
+            // Keep watching newly created/moved directories.
+            if ((ev->mask & IN_ISDIR) && (ev->mask & (IN_CREATE | IN_MOVED_TO)) && !full_path.empty()) {
+                add_watch(full_path);
+            }
+
+            if ((ev->mask & (IN_DELETE | IN_MOVED_FROM)) && ev->len > 0 && !(ev->mask & IN_ISDIR)) {
+                std::string msg;
+                if (ev->mask & IN_DELETE) {
+                    msg = "Deleted file: " + full_path;
+                } else {
+                    msg = "Moved out file: " + full_path;
+                }
+
+                RawEvent e{};
+                e.type = 2;
+                e.event_id = g_event_counter.fetch_add(1);
+                strncpy(e.text, msg.c_str(), TEXT_SIZE - 1);
+                std::cout << "[DELETE] " << e.text << "\n";
+                while (!queue->enqueue(e)) std::this_thread::yield();
+            }
+            i += sizeof(struct inotify_event) + ev->len;
         }
-
-        RawEvent e{};
-        e.type = 2;
-        e.event_id = g_event_counter.fetch_add(1);
-        strncpy(e.text, msg.c_str(), TEXT_SIZE - 1);
-        std::cout << "[DELETE] " << e.text << "\n";
-        while (!queue->enqueue(e)) std::this_thread::yield();
-    }
-    i += sizeof(struct inotify_event) + ev->len;
-}
     }
 
     for (const auto& [wd, _] : wd_to_path) {

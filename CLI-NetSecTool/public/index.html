@@ -131,6 +131,33 @@
             position: relative;
         }
 
+        .flow-hint {
+            margin-bottom: 1rem;
+            padding: 0.9rem 1rem;
+            border: 1px solid var(--primary-dark);
+            border-radius: 6px;
+            background: rgba(0, 255, 0, 0.04);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.7rem;
+            align-items: center;
+        }
+
+        .flow-step {
+            border: 1px solid var(--primary-dark);
+            border-radius: 999px;
+            padding: 0.2rem 0.7rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            background: var(--surface);
+        }
+
+        .flow-step.active {
+            color: var(--background);
+            background: var(--primary);
+            border-color: var(--primary);
+        }
+
         .input-group label {
             display: block;
             margin-bottom: 0.5rem;
@@ -1323,6 +1350,11 @@
                 </div>
 
                 <div class="tab-content active" data-tab="fetch">
+                    <div class="flow-hint" id="flow-hint">
+                        <span class="flow-step active" id="flow-step-resolve">1. Resolve</span>
+                        <span class="flow-step" id="flow-step-fetch">2. Fetch</span>
+                        <span class="flow-step" id="flow-step-show">3. Show Logs</span>
+                    </div>
                     <div class="input-group">
                         <label for="cid-input">CID</label>
                         <input type="text" id="cid-input" placeholder="Enter CID..." autocomplete="off">
