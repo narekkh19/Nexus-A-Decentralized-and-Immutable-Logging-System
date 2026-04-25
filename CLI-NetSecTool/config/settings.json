@@ -30,7 +30,7 @@
   },
   "server": {
     "port": 6005,
-    "host": "localhost",
+    "host": "0.0.0.0",
     "static_dir": "public",
     "api_prefix": "/api",
     "cors": {
@@ -52,12 +52,12 @@
   "ipfs": {
     "api_url": "http://localhost:5001",
     "timeout": 30000,
-    "max_retries": 2,
-    "allow_offline": false,
+    "max_retries": 4,
+    "allow_offline": true,
     "allow_online": true,
     "pin_enabled": false,
     "pin_recursive": false,
-    "name_resolve_timeout": "30s",
+    "name_resolve_timeout": "60s",
     "last_file_path": ".last_prev",
     "pid_file": ".ipfs-daemon.pid",
     "daemon_startup_timeout": 30000,
@@ -66,7 +66,15 @@
       "--enable-namesys-pubsub",
       "--routing=dhtclient"
     ],
-    "repo_dir": ".ipfs"
+    "repo_dir": ".ipfs",
+    "connection_mode": "gateway",
+    "gateway_url": "https://nftstorage.link/ipfs/",
+    "use_fallback_gateways": true,
+    "fallback_gateways": [
+      "https://cloudflare-ipfs.com/ipfs/",
+      "https://dweb.link/ipfs/",
+      "https://ipfs.io/ipfs/"
+    ]
   },
   "encryption": {
     "default_cipher": "aes-256-gcm",

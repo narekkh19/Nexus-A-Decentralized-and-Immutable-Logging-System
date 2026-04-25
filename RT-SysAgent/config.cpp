@@ -12,6 +12,25 @@
 using json = nlohmann::json;
 
 namespace Config {
+    namespace {
+        std::string expand_user_path(const std::string& input) {
+            if (input.empty() || input[0] != '~') {
+                return input;
+            }
+            const char* home = std::getenv("HOME");
+            if (!home) {
+                return input;
+            }
+            if (input.size() == 1) {
+                return std::string(home);
+            }
+            if (input[1] == '/') {
+                return std::string(home) + input.substr(1);
+            }
+            return input;
+        }
+    }
+
     // Global configuration instances
     Directories dirs;
     FileMonitorConfig file_monitor;
@@ -44,10 +63,11 @@ namespace Config {
     }
 
     std::string get_absolute_path(const std::string& relative_path) {
-        if (std::filesystem::path(relative_path).is_absolute()) {
-            return relative_path;
+        const std::string expanded_path = expand_user_path(relative_path);
+        if (std::filesystem::path(expanded_path).is_absolute()) {
+            return expanded_path;
         }
-        return dirs.project_root + "/" + relative_path;
+        return dirs.project_root + "/" + expanded_path;
     }
 
     bool ensure_directory_exists(const std::string& path) {
@@ -238,6 +258,9 @@ namespace Config {
             
             if (config.contains("file_monitor") && config["file_monitor"].contains("watch_paths")) {
                 file_monitor.watch_paths = config["file_monitor"]["watch_paths"].get<std::vector<std::string>>();
+                for (auto& path : file_monitor.watch_paths) {
+                    path = get_absolute_path(path);
+                }
             }
             
             if (config.contains("system_monitor")) {
@@ -256,6 +279,8 @@ namespace Config {
                 auto& enc_config = config["encryption"];
                 if (enc_config.contains("private_key_path")) encryption.private_key_path = enc_config["private_key_path"];
                 if (enc_config.contains("public_key_path")) encryption.public_key_path = enc_config["public_key_path"];
+                encryption.private_key_path = get_absolute_path(encryption.private_key_path);
+                encryption.public_key_path = get_absolute_path(encryption.public_key_path);
             }
             
             if (config.contains("patterns")) {
@@ -264,16 +289,19 @@ namespace Config {
                 if (pat_config.contains("default_patterns")) {
                     patterns.default_patterns = pat_config["default_patterns"].get<std::vector<std::string>>();
                 }
+                patterns.pattern_file_path = get_absolute_path(patterns.pattern_file_path);
             }
             
             if (config.contains("logging")) {
                 auto& log_config = config["logging"];
                 if (log_config.contains("log_file_path")) logging.log_file_path = log_config["log_file_path"];
+                logging.log_file_path = get_absolute_path(logging.log_file_path);
             }
             
             if (config.contains("shared_memory")) {
                 auto& shm_config = config["shared_memory"];
                 if (shm_config.contains("queue_file_path")) shared_memory.queue_file_path = shm_config["queue_file_path"];
+                shared_memory.queue_file_path = get_absolute_path(shared_memory.queue_file_path);
             }
             
             std::cout << "Configuration loaded from: " << full_path << std::endl;

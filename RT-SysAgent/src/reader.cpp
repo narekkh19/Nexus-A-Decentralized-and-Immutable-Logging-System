@@ -84,6 +84,22 @@ std::string resolve_ipns(const std::string& ipns_id) {
     return "null";
 }
 
+bool publish_with_retry(const std::string& cid, int retries = 3) {
+    for (int attempt = 1; attempt <= retries; ++attempt) {
+        std::string publish_cmd =
+            "ipfs name publish --key=" + Config::ipfs.ipns_key_name +
+            " --allow-offline --ttl=" + std::to_string(Config::IPFSConfig::IPNS_TTL_SECONDS) + "s /ipfs/" + cid;
+        int ret = fast_system(publish_cmd);
+        if (ret == 0) {
+            std::cout << "[IPNS] Head updated to: " << cid << "\n";
+            return true;
+        }
+        std::cerr << "[IPNS] Publish attempt " << attempt << "/" << retries << " failed.\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(500 * attempt));
+    }
+    return false;
+}
+
 void push_log_bucket_if_needed(bool force = false) {
     std::lock_guard<std::mutex> lock(log_mutex);
     auto now = std::chrono::steady_clock::now();
@@ -112,7 +128,16 @@ void push_log_bucket_if_needed(bool force = false) {
         std::string encrypted_file = Config::dirs.get_tmp_path() + "/log_batch.json.enc";
         write_minimal_encrypted_json(encrypted_file, ciphertext, iv, tag, encrypted_key);
 
-        std::string cid = ipfs_add(encrypted_file);
+        std::string cid;
+        for (int attempt = 1; attempt <= 3; ++attempt) {
+            cid = ipfs_add(encrypted_file);
+            if (!cid.empty()) break;
+            std::cerr << "[IPFS] Add attempt " << attempt << "/3 failed.\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(500 * attempt));
+        }
+        if (cid.empty()) {
+            throw std::runtime_error("Failed to add encrypted log batch to IPFS after retries.");
+        }
         std::cout << "[IPFS] Pushed CID: " << cid << "\n";
 
         {
@@ -120,14 +145,9 @@ void push_log_bucket_if_needed(bool force = false) {
             g_prev_cid = cid;
         }
 
-        std::string publish_cmd =
-            "ipfs name publish --key=" + Config::ipfs.ipns_key_name +
-            " --allow-offline --ttl=" + std::to_string(Config::IPFSConfig::IPNS_TTL_SECONDS) + "s /ipfs/" + cid;
-        int ret = fast_system(publish_cmd);
-        if (ret == 0)
-            std::cout << "[IPNS] Head updated to: " << cid << "\n";
-        else
+        if (!publish_with_retry(cid, 3)) {
             std::cerr << "[IPNS] Failed to update IPNS head.\n";
+        }
 
         log_bucket.clear();
         last_push_time = std::chrono::steady_clock::now();

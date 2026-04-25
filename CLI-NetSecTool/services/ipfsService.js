@@ -38,6 +38,23 @@ function runIpfs(args, timeout) {
     });
 }
 
+async function fetchWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, {
+            method: 'GET',
+            headers: {
+                'User-Agent': 'Nexus-CLI',
+                'Accept': '*/*'
+            },
+            signal: controller.signal
+        });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 class IpfsService {
     constructor() {
         this.config = null;
@@ -83,47 +100,41 @@ class IpfsService {
 
     // Get data from IPFS by CID
     async getData(cid) {
-        try {
-            logger.info('Fetching data from IPFS', { cid, operation: 'fetch' });
+        if (!this.config) await this.loadConfig();
+        const gateways = [
+            this.config.gateway_url,
+            ...(this.config.use_fallback_gateways ? this.config.fallback_gateways : [])
+        ].filter(Boolean);
 
-            const url = `https://ipfs.io/ipfs/${cid}`;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'User-Agent': 'curl/7.64.1',
-                    'Accept': '*/*'
-                },
-                timeout: 30000
-            });
+        logger.info('Fetching data from IPFS', { cid, operation: 'fetch' });
 
-            if (!response.ok) {
-                const error = `HTTP error! status: ${response.status}`;
-                logger.error('Failed to fetch from IPFS', { cid, error, operation: 'fetch' });
-                throw new Error(error);
+        const errors = [];
+        for (const gateway of gateways) {
+            for (let i = 0; i < this.config.max_retries; i++) {
+                try {
+                    const response = await fetchWithTimeout(`${gateway}${cid}`, this.config.timeout);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const text = await response.text();
+                    logger.info('Successfully fetched data from gateway', {
+                        cid,
+                        gateway,
+                        operation: 'fetch',
+                        size: text.length
+                    });
+                    return text;
+                } catch (err) {
+                    errors.push(`${gateway} attempt ${i + 1}: ${err.message}`);
+                }
             }
-
-            const text = await response.text();
-            logger.info('Successfully fetched data from IPFS', { 
-                cid, 
-                operation: 'fetch',
-                size: text.length,
-                status: response.status
-            });
-
-            return text;
-        } catch (err) {
-            logger.error('Failed to fetch from IPFS', { 
-                cid, 
-                error: err.message, 
-                operation: 'fetch',
-                stack: err.stack
-            });
-            throw new Error(`Failed to fetch from IPFS: ${err.message}`);
         }
+
+        throw new Error(`Failed to fetch from all gateways: ${errors.join(' | ')}`);
     }
 
     // Resolve IPNS name to CID
-    async resolveName() {
+    async resolveName(ipnsKeyOrPeerId) {
         try {
             if (!this.config) await this.loadConfig();
             
@@ -131,18 +142,36 @@ class IpfsService {
 
             // Read IPNS key from file
             const keyPath = path.resolve(process.cwd(), this.encryption.ipns_key_file);
-            let peerId;
-            try {
-                peerId = await fs.readFile(keyPath, 'utf-8');
-                peerId = peerId.trim();
-                logger.debug('Read IPNS key from file', { keyPath, operation: 'resolve' });
-            } catch (err) {
-                logger.error('Failed to read IPNS key file', { 
-                    keyPath, 
-                    error: err.message, 
-                    operation: 'resolve' 
+            let peerId = (ipnsKeyOrPeerId || '').trim();
+            if (!peerId) {
+                try {
+                    peerId = await fs.readFile(keyPath, 'utf-8');
+                    peerId = peerId.trim();
+                    logger.debug('Read IPNS key from file', { keyPath, operation: 'resolve' });
+                } catch (err) {
+                    logger.error('Failed to read IPNS key file', { 
+                        keyPath, 
+                        error: err.message, 
+                        operation: 'resolve' 
+                    });
+                    throw new Error(`Cannot read IPNS key file: ${keyPath}`);
+                }
+            }
+
+            // If a key name (e.g. "log-agent") is provided, resolve it to peer ID first.
+            const looksLikePeerId = peerId.startsWith('k') || peerId.startsWith('Qm');
+            if (!looksLikePeerId) {
+                const keysOutput = await this.runWithRetry(['key', 'list', '-l']);
+                const lines = keysOutput.split('\n').map(line => line.trim()).filter(Boolean);
+                const match = lines.find((line) => {
+                    const parts = line.split(/\s+/);
+                    return parts.length >= 2 && parts[parts.length - 1] === peerId;
                 });
-                throw new Error(`Cannot read IPNS key file: ${keyPath}`);
+
+                if (!match) {
+                    throw new Error(`IPNS key "${peerId}" not found in local IPFS key list`);
+                }
+                peerId = match.split(/\s+/)[0];
             }
 
             if (!peerId) {

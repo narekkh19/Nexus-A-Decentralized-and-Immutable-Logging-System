@@ -374,7 +374,9 @@ router.get('/stats', async (_req, res) => {
             try {
                 const { execSync } = await import('child_process');
                 try {
-                    const ethtoolOutput = execSync(`ethtool ${name}`, { encoding: 'utf8' });
+                    // `ethtool` can print scary netlink errors on Wi-Fi or without permissions.
+                    // Suppress stderr so the demo UI doesn't get flooded with noise.
+                    const ethtoolOutput = execSync(`ethtool ${name}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
                     const speedMatch = ethtoolOutput.match(/Speed: (\d+)Mb\/s/);
                     if (speedMatch) {
                         return parseInt(speedMatch[1]);
@@ -385,13 +387,16 @@ router.get('/stats', async (_req, res) => {
 
                 const speedPath = `/sys/class/net/${name}/speed`;
                 if (fs.existsSync(speedPath)) {
-                    const speed = parseInt(await fs.promises.readFile(speedPath, 'utf8'));
-                    if (!isNaN(speed) && speed > 0) {
-                        return speed;
+                    try {
+                        const speed = parseInt(await fs.promises.readFile(speedPath, 'utf8'));
+                        if (!isNaN(speed) && speed > 0) return speed;
+                    } catch (e) {
+                        // Wi-Fi commonly returns EINVAL here. Not fatal; just fall back.
+                        logger.debug?.(`Speed file not readable for ${name}: ${e.message}`);
                     }
                 }
             } catch (e) {
-                logger.error(`Error detecting speed for ${name}:`, e);
+                logger.debug?.(`Error detecting speed for ${name}: ${e.message}`);
             }
         } else if (platform === 'darwin') {
             try {

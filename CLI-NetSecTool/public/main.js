@@ -1375,6 +1375,8 @@ const logSearch = document.getElementById('log-search');
 
 let logs = [];
 let isLoadingLogs = false;
+let apiHealthy = true;
+let apiHealthRetryTimer = null;
 
 // Update log visibility based on filters
 function updateLogVisibility() {
@@ -1509,6 +1511,7 @@ logViewerHeader.addEventListener('click', () => {
 
 // Write log to server
 async function writeLog(level, message, meta = {}) {
+    if (!apiHealthy) return;
     const maxRetries = 3;
     let retryCount = 0;
     let lastError = null;
@@ -1548,7 +1551,21 @@ async function writeLog(level, message, meta = {}) {
     }
 
     // If we get here, all retries failed
-    console.error('Failed to write log after retries:', lastError);
+    // IMPORTANT: don't use console.error here because we override console.* below
+    // and that can create an infinite recursion loop when the API is unreachable.
+    try {
+        const fallbackErr = globalThis.__nexusOriginalConsole?.error || globalThis.console?.error;
+        if (typeof fallbackErr === 'function') fallbackErr('Failed to write log after retries:', lastError);
+    } catch (_) {}
+
+    // Mark API unhealthy to stop spamming requests; retry later.
+    apiHealthy = false;
+    if (!apiHealthRetryTimer) {
+        apiHealthRetryTimer = setTimeout(() => {
+            apiHealthy = true;
+            apiHealthRetryTimer = null;
+        }, 10_000);
+    }
     
     // Store failed log locally
     const failedLog = {
@@ -1617,24 +1634,27 @@ const originalConsole = {
     log: console.log
 };
 
+// Expose for safe logging when console is overridden.
+globalThis.__nexusOriginalConsole = originalConsole;
+
 console.error = (...args) => {
     originalConsole.error.apply(console, args);
-    writeLog('error', args.join(' '));
+    if (apiHealthy) writeLog('error', args.join(' '));
 };
 
 console.warn = (...args) => {
     originalConsole.warn.apply(console, args);
-    writeLog('warn', args.join(' '));
+    if (apiHealthy) writeLog('warn', args.join(' '));
 };
 
 console.info = (...args) => {
     originalConsole.info.apply(console, args);
-    writeLog('info', args.join(' '));
+    if (apiHealthy) writeLog('info', args.join(' '));
 };
 
 console.log = (...args) => {
     originalConsole.log.apply(console, args);
-    writeLog('info', args.join(' '));
+    if (apiHealthy) writeLog('info', args.join(' '));
 };
 
 // Handle uncaught errors

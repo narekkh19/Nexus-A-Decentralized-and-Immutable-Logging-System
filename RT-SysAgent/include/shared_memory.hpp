@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <stdexcept>
 #include <cstring>
 #include <string>
@@ -19,6 +20,11 @@ public:
         }
 
         if (create) {
+            // Ensure the queue file is usable by non-root processes (e.g., reader).
+            // open(..., mode) can be affected by umask, so enforce permissions explicitly.
+            (void)fchmod(fd, Config::SharedMemoryConfig::FILE_PERMISSIONS);
+            (void)chmod(path.c_str(), Config::SharedMemoryConfig::FILE_PERMISSIONS);
+
             if (ftruncate(fd, size) == -1) {
                 close(fd);
                 throw std::runtime_error("Failed to set size of shared memory file");
