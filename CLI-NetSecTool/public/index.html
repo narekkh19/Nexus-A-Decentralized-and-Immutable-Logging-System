@@ -158,6 +158,190 @@
             border-color: var(--primary);
         }
 
+        .fetch-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 0.8rem;
+            margin-bottom: 1rem;
+        }
+
+        .fetch-controls select {
+            height: 40px;
+            padding: 0 0.7rem;
+        }
+
+        .distribution-panel {
+            border: 1px solid var(--primary-dark);
+            border-radius: 8px;
+            background: rgba(0, 255, 0, 0.03);
+            margin-bottom: 1rem;
+            padding: 1rem;
+        }
+
+        .network-layout {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+        }
+
+        .host-grid, .persona-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.8rem;
+        }
+
+        .host-card, .persona-card {
+            border: 1px solid var(--primary-dark);
+            border-radius: 8px;
+            padding: 0.8rem;
+            background: rgba(0, 0, 0, 0.22);
+        }
+
+        .host-title, .persona-title {
+            color: var(--primary);
+            font-size: 0.95rem;
+            margin-bottom: 0.4rem;
+            font-weight: bold;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .host-metrics, .persona-items {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .info-grid, .timeline-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 0.8rem;
+        }
+
+        .info-card, .timeline-card {
+            border: 1px solid var(--primary-dark);
+            border-radius: 8px;
+            padding: 0.9rem;
+            background: rgba(0, 0, 0, 0.22);
+        }
+
+        .info-card h4, .timeline-title {
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+
+        .info-card p, .info-card ul, .timeline-content {
+            color: var(--text-secondary);
+            font-size: 0.83rem;
+            line-height: 1.5;
+        }
+
+        .info-card ul {
+            padding-left: 1rem;
+        }
+
+        .distribution-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.7rem;
+            color: var(--primary);
+            font-weight: bold;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+        }
+
+        .world-map {
+            position: relative;
+            height: 260px;
+            border: 1px solid var(--primary-dark);
+            border-radius: 6px;
+            background: linear-gradient(180deg, rgba(0, 255, 0, 0.06), rgba(0, 0, 0, 0.2));
+            margin-bottom: 0.8rem;
+            overflow: hidden;
+        }
+
+        .world-map-image {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            opacity: 0.92;
+            filter: grayscale(1) hue-rotate(80deg) saturate(1.1) brightness(0.78) contrast(1.05);
+            z-index: 0;
+        }
+
+        .region-dot {
+            position: absolute;
+            width: 11px;
+            height: 11px;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.2);
+            z-index: 2;
+        }
+
+        .region-dot.ok { background: #00ff66; }
+        .region-dot.fail { background: #ff4d4d; }
+
+        .region-label {
+            position: absolute;
+            transform: translate(10px, -50%);
+            color: #d8ffe8;
+            font-size: 0.72rem;
+            text-shadow: 0 0 4px rgba(0, 0, 0, 0.85);
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        .map-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.7rem 1rem;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.6rem;
+        }
+
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .legend-dot.ok { background: #00ff66; }
+        .legend-dot.fail { background: #ff4d4d; }
+        .legend-dot.waiting { background: #3b3b3b; }
+
+        .gateway-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.6rem;
+        }
+
+        .gateway-card {
+            border: 1px solid var(--primary-dark);
+            border-radius: 6px;
+            padding: 0.6rem;
+            background: rgba(0, 0, 0, 0.25);
+            font-size: 0.82rem;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .gateway-card .status-ok { color: #00ff66; }
+        .gateway-card .status-fail { color: #ff6666; }
+
         .input-group label {
             display: block;
             margin-bottom: 0.5rem;
@@ -702,6 +886,7 @@
 
         .tab-container {
             display: flex;
+            flex-wrap: wrap;
             gap: 1rem;
             margin-bottom: 1.5rem;
             border-bottom: 1px solid var(--primary-dark);
@@ -716,9 +901,20 @@
             color: var(--text);
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 1rem;
-            min-width: 120px;
+            font-size: 0.92rem;
+            min-width: 0;
+            flex: 1 1 140px;
             text-align: center;
+            white-space: normal;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        #distribution-cid-label {
+            max-width: 100%;
+            overflow-wrap: anywhere;
+            word-break: break-all;
         }
 
         .tab:hover {
@@ -776,7 +972,7 @@
             cursor: pointer;
         }
 
-        /* Добавляем стили для кнопки добавления элемента массива */
+        /* Styles for the “add array item” control */
         .config-array-container > button {
             align-self: flex-start;
             margin-top: 0.5rem;
@@ -801,8 +997,7 @@
             font-size: 1.2rem;
         }
 
-        /* Добавляем стили для подсказок */
-        /* Стили для тултипов */
+        /* Native tooltip styling ([title]) */
         [title] {
             position: relative;
         }
@@ -1281,7 +1476,7 @@
             100% { opacity: 1; transform: scale(1); }
         }
 
-        /* Добавляем кнопку для сброса максимумов */
+        /* Reset-max button on network interface cards */
         .network-interface {
             position: relative;
         }
@@ -1345,6 +1540,9 @@
             <div class="panel">
                 <div class="tab-container">
                     <div class="tab active" data-tab="fetch">Fetch Logs</div>
+                    <div class="tab" data-tab="network">IPFS Network</div>
+                    <div class="tab" data-tab="timeline">Incident Timeline</div>
+                    <div class="tab" data-tab="overview">Host Overview</div>
                     <div class="tab" data-tab="keys">IPNS Keys</div>
                     <div class="tab" data-tab="config">Configuration</div>
                 </div>
@@ -1363,11 +1561,97 @@
                         <button id="fetch-btn">FETCH LOGS</button>
                         <button id="resolve-btn" style="margin-top: 1rem;">RESOLVE IPNS</button>
                     </div>
+                    <div class="fetch-controls">
+                        <select id="log-type-filter">
+                            <option value="ALL">All Types</option>
+                            <option value="FILE_DELETE">File Delete</option>
+                            <option value="SYSLOG">Syslog</option>
+                            <option value="USB">USB</option>
+                        </select>
+                        <select id="log-sort-order">
+                            <option value="event_desc">Event ID Desc</option>
+                            <option value="event_asc">Event ID Asc</option>
+                            <option value="time_desc">Time Desc</option>
+                            <option value="time_asc">Time Asc</option>
+                        </select>
+                        <button id="refresh-distribution-btn" class="secondary">Refresh Distribution</button>
+                    </div>
                     <div class="logs-container" id="logs-output">
                         <div class="loading-overlay" id="loading-overlay">
                             <div class="loading-spinner"></div>
                             <div class="loading-text">Processing...</div>
                         </div>
+                    </div>
+                </div>
+
+                <div class="tab-content" data-tab="network">
+                    <div class="network-layout">
+                        <div class="distribution-panel">
+                            <div class="distribution-header">
+                                <span>IPFS Distribution View</span>
+                                <span id="distribution-cid-label">CID: not resolved</span>
+                            </div>
+                            <div class="map-legend">
+                                <span class="legend-item"><span class="legend-dot ok"></span> Green: reachable gateway</span>
+                                <span class="legend-item"><span class="legend-dot fail"></span> Red: unreachable/timeout</span>
+                                <span class="legend-item"><span class="legend-dot waiting"></span> Gray: waiting for probe</span>
+                            </div>
+                            <div class="world-map" id="world-map">
+                                <img
+                                    class="world-map-image"
+                                    alt="World map"
+                                    src="https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg"
+                                />
+                            </div>
+                            <div class="gateway-grid" id="gateway-grid"></div>
+                            <div class="distribution-header" style="margin-top: 1rem;">
+                                <span>IPFS & IPNS Explained</span>
+                                <span>Presentation Notes</span>
+                            </div>
+                            <div class="info-grid">
+                            <div class="info-card">
+                                <h4>What is CID?</h4>
+                                <p>A CID is a content fingerprint. If the content changes, CID changes. This gives immutable evidence references.</p>
+                            </div>
+                            <div class="info-card">
+                                <h4>What is IPNS?</h4>
+                                <p>IPNS is a mutable pointer to the latest CID. Your UI resolves one name and always reaches the newest log batch.</p>
+                            </div>
+                            <div class="info-card">
+                                <h4>Why Distributed?</h4>
+                                <p>Multiple gateways and peers can serve the same CID. No single host owns your evidence availability.</p>
+                            </div>
+                            <div class="info-card">
+                                <h4>Demo Narrative</h4>
+                                <ul>
+                                    <li>Resolve IPNS to latest CID</li>
+                                    <li>Fetch current logs and previous chain</li>
+                                    <li>Show FILE_DELETE events as immutable evidence</li>
+                                    <li>Prove distribution using network map + gateway probes</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                </div>
+
+                <div class="tab-content" data-tab="timeline">
+                    <div class="distribution-panel">
+                        <div class="distribution-header">
+                            <span>Incident Timeline</span>
+                            <span id="timeline-summary">No incidents loaded</span>
+                        </div>
+                        <div class="timeline-grid" id="timeline-grid"></div>
+                    </div>
+                </div>
+
+                <div class="tab-content" data-tab="overview">
+                    <div class="distribution-panel">
+                        <div class="distribution-header">
+                            <span>Host Overview</span>
+                            <span id="host-overview-summary">No host data yet</span>
+                        </div>
+                        <div class="host-grid" id="host-grid"></div>
                     </div>
                 </div>
 
@@ -1491,6 +1775,6 @@
         <div class="log-viewer-content" id="log-viewer-content"></div>
     </div>
 
-    <script src="main.js"></script>
+    <script src="main.js?v=20260425-9"></script>
 </body>
 </html> 

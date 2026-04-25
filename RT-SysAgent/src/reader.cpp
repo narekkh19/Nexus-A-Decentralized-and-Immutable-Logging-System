@@ -10,6 +10,7 @@
 #include <sstream>
 #include <cstdio>
 #include <array>
+#include <unistd.h>
 #include "shared_memory.hpp"
 #include "mmap_queue.hpp"
 #include "log_utils.hpp"
@@ -34,6 +35,19 @@ std::vector<json> log_bucket;
 std::string g_prev_cid = "null";
 std::string g_ipns_id = "";
 std::chrono::steady_clock::time_point last_push_time;
+
+static std::string agent_hostname() {
+    static std::string cached;
+    if (!cached.empty()) return cached;
+    char buf[256]{};
+    if (gethostname(buf, sizeof(buf) - 1) == 0) {
+        buf[sizeof(buf) - 1] = '\0';
+        cached.assign(buf);
+    } else {
+        cached = "unknown-host";
+    }
+    return cached;
+}
 
 struct RawEvent {
     uint8_t type; // 0 = SYSLOG_LINE, 1 = USB_EVENT
@@ -168,6 +182,7 @@ void worker_thread(int id, QueueType* queue) {
             json log_entry = {
                 {"event_id", ev.event_id},
                 {"type", event_type},
+                {"host", agent_hostname()},
                 {"message", std::string(ev.text)},
                 {"timestamp", current_timestamp()}
             };
@@ -195,8 +210,9 @@ void ensure_directories() {
 }
 
 int main() {
-    std::cout << ":rocket: Reader initializing...\n";
-    
+    std::cout << "Reader initializing...\n";
+    (void)agent_hostname();
+
     // Initialize configuration
     Config::initialize_config();
     Config::load_config_from_file();

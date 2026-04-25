@@ -56,20 +56,47 @@ const systemStats = document.getElementById('system-stats');
 const flowResolveStep = document.getElementById('flow-step-resolve');
 const flowFetchStep = document.getElementById('flow-step-fetch');
 const flowShowStep = document.getElementById('flow-step-show');
+const logTypeFilter = document.getElementById('log-type-filter');
+const logSortOrder = document.getElementById('log-sort-order');
+const refreshDistributionBtn = document.getElementById('refresh-distribution-btn');
+const distributionCidLabel = document.getElementById('distribution-cid-label');
+const worldMap = document.getElementById('world-map');
+const gatewayGrid = document.getElementById('gateway-grid');
+const hostGrid = document.getElementById('host-grid');
+const hostOverviewSummary = document.getElementById('host-overview-summary');
+const timelineGrid = document.getElementById('timeline-grid');
+const timelineSummary = document.getElementById('timeline-summary');
 
 let appInitialized = false;
 let isResolving = false;
 let isFetching = false;
+let latestFetchedLogs = [];
+let latestResolvedCid = '';
+let latestPrevCid = '';
+let resolveCooldownUntil = 0;
 
-// Tab handling
-document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        
-        tab.classList.add('active');
-        document.querySelector(`.tab-content[data-tab="${tab.dataset.tab}"]`).classList.add('active');
+function activateTab(tabName) {
+    if (!tabName) return;
+    document.querySelectorAll('.tab').forEach((t) => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
     });
+    document.querySelectorAll('.tab-content').forEach((c) => {
+        const isActive = c.dataset.tab === tabName;
+        c.classList.toggle('active', isActive);
+        // Hard fallback so tab content still opens even if CSS class handling breaks.
+        c.style.display = isActive ? 'block' : 'none';
+    });
+
+    if (tabName === 'keys') loadKeys();
+    if (tabName === 'timeline') renderIncidentTimeline();
+    if (tabName === 'overview') renderHostOverview();
+}
+
+// Tab handling (event delegation for reliability)
+document.addEventListener('click', (event) => {
+    const tabEl = event.target.closest('.tab');
+    if (!tabEl) return;
+    activateTab(tabEl.dataset.tab);
 });
 
 // Show status message
@@ -89,6 +116,32 @@ function showStatus(message, isError = false) {
     }, 3000);
 }
 
+function parseRawLog(rawLog) {
+    try {
+        return typeof rawLog === 'string' ? JSON.parse(rawLog) : rawLog;
+    } catch (_err) {
+        return null;
+    }
+}
+
+function normalizedType(logObj) {
+    if (!logObj) return 'UNKNOWN';
+    const rawType = (logObj.type || '').toUpperCase();
+    const message = (logObj.message || '').toLowerCase();
+    if (rawType === 'SYSTEM' && message.startsWith('deleted file:')) {
+        return 'FILE_DELETE';
+    }
+    return rawType || 'UNKNOWN';
+}
+
+function isNoisySyslog(logObj) {
+    if (!logObj || normalizedType(logObj) !== 'SYSLOG') return false;
+    const message = (logObj.message || '').toLowerCase();
+    return message.includes('tracker-miner-fs-3') &&
+        message.includes('glib-gio-warning') &&
+        message.includes('/proc/self/mountinfo');
+}
+
 function setFlowStep(step) {
     if (!flowResolveStep || !flowFetchStep || !flowShowStep) return;
     [flowResolveStep, flowFetchStep, flowShowStep].forEach((el) => el.classList.remove('active'));
@@ -103,9 +156,375 @@ function setButtonLoading(button, loadingText, defaultText, loading) {
     button.textContent = loading ? loadingText : defaultText;
 }
 
+function getTypeFromRawLog(rawLog) {
+    const parsed = parseRawLog(rawLog);
+    return normalizedType(parsed);
+}
+
+function compareLogsBySort(a, b) {
+    const mode = logSortOrder?.value || 'event_desc';
+    const aObj = parseRawLog(a) || {};
+    const bObj = parseRawLog(b) || {};
+    const aEvent = Number(aObj.event_id || 0);
+    const bEvent = Number(bObj.event_id || 0);
+    const aTime = new Date(aObj.timestamp || 0).getTime();
+    const bTime = new Date(bObj.timestamp || 0).getTime();
+
+    if (mode === 'event_asc') return aEvent - bEvent;
+    if (mode === 'time_desc') return bTime - aTime;
+    if (mode === 'time_asc') return aTime - bTime;
+    return bEvent - aEvent;
+}
+
+function applyFetchFilters(rawLogs) {
+    const selectedType = logTypeFilter?.value || 'ALL';
+    return rawLogs
+        .filter((raw) => {
+            const parsed = parseRawLog(raw);
+            if (!parsed) return false;
+            if (isNoisySyslog(parsed)) return false;
+            return selectedType === 'ALL' || getTypeFromRawLog(raw) === selectedType;
+        })
+        .sort(compareLogsBySort);
+}
+
+function clearFetchResultsArea() {
+    if (!logsOutput || !loading?.overlay) return;
+    Array.from(logsOutput.children)
+        .filter(node => node !== loading.overlay)
+        .forEach(node => node.remove());
+}
+
+function renderFetchedLogs() {
+    clearFetchResultsArea();
+    renderHostOverview();
+    renderIncidentTimeline();
+    const sortedLogs = applyFetchFilters(latestFetchedLogs);
+
+    if (!sortedLogs.length) {
+        const emptyDiv = document.createElement('div');
+        emptyDiv.style.cssText = `
+            padding: 1rem;
+            border: 1px dashed var(--primary-dark);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        `;
+        emptyDiv.textContent = 'No logs match current filters.';
+        logsOutput.insertBefore(emptyDiv, loading.overlay);
+        return;
+    }
+
+    const logsGroup = document.createElement('div');
+    logsGroup.className = 'logs-group';
+    logsGroup.style.marginBottom = '1.5rem';
+
+    for (const raw of sortedLogs) {
+        const entry = createLogEntry(raw);
+        if (entry) logsGroup.appendChild(entry);
+    }
+    logsOutput.insertBefore(logsGroup, loading.overlay);
+
+    if (latestPrevCid) {
+        const navInfo = document.createElement('div');
+        navInfo.style.cssText = `
+            color: var(--primary);
+            padding: 1rem;
+            border-top: 1px solid var(--primary);
+            margin-top: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        `;
+
+        const cidText = document.createElement('div');
+        cidText.style.cssText = `
+            font-family: 'Share Tech Mono', monospace;
+            word-break: break-all;
+            flex: 1;
+        `;
+        cidText.textContent = `Previous CID: ${latestPrevCid}`;
+
+        const chainButton = document.createElement('button');
+        chainButton.className = 'primary';
+        chainButton.style.cssText = `
+            width: 150px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        chainButton.innerHTML = 'Chain Fetch';
+
+        const hasZeroId = sortedLogs.some(log => {
+            const parsedLog = parseRawLog(log);
+            return parsedLog?.event_id === 0;
+        });
+
+        if (hasZeroId) {
+            chainButton.disabled = true;
+            chainButton.style.opacity = '0.5';
+            chainButton.style.cursor = 'not-allowed';
+            chainButton.title = 'Reached the beginning of the chain';
+        } else {
+            chainButton.onclick = () => {
+                cidInput.value = latestPrevCid;
+                fetchLogs(latestPrevCid);
+            };
+        }
+
+        navInfo.appendChild(cidText);
+        navInfo.appendChild(chainButton);
+        logsOutput.insertBefore(navInfo, loading.overlay);
+    }
+}
+
+function regionByGateway(gateway) {
+    const host = (() => {
+        try { return new URL(gateway).hostname; } catch (_e) { return ''; }
+    })();
+    if (host.includes('cloudflare')) return { name: 'EU', x: 48, y: 35 };
+    if (host.includes('nftstorage')) return { name: 'US', x: 24, y: 40 };
+    if (host.includes('dweb')) return { name: 'APAC', x: 76, y: 52 };
+    if (host.includes('ipfs.io')) return { name: 'US', x: 28, y: 44 };
+    return { name: 'Unknown', x: 52, y: 50 };
+}
+
+function stableHash(input) {
+    let h = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+        h ^= input.charCodeAt(i);
+        h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    return h >>> 0;
+}
+
+function mapPointForGateway(gateway, cid = '') {
+    const base = regionByGateway(gateway);
+    const seed = stableHash(`${gateway}|${cid}`);
+    const xJitter = ((seed % 1000) / 1000 - 0.5) * 7;
+    const yJitter = ((((seed >> 10) % 1000) / 1000) - 0.5) * 5;
+    return {
+        name: base.name,
+        x: Math.min(95, Math.max(5, base.x + xJitter)),
+        y: Math.min(90, Math.max(8, base.y + yJitter))
+    };
+}
+
+function trimStr(value) {
+    if (value === undefined || value === null) return '';
+    return String(value).trim();
+}
+
+function structuredHostFromLog(log) {
+    if (!log || typeof log !== 'object') return '';
+    return trimStr(log.host || log.hostname || log.agent_host || log.agentHost);
+}
+
+function extractHostFromSyslogMessage(message) {
+    if (!message || typeof message !== 'string') return '';
+    const parts = message.trim().split(/\s+/);
+    if (parts.length >= 4 && /^\d{4}-\d{2}-\d{2}T/.test(parts[0])) return parts[1];
+    return '';
+}
+
+function extractHostFromMessage(message) {
+    if (!message || typeof message !== 'string') return 'unknown-host';
+    const fromIso = extractHostFromSyslogMessage(message);
+    if (fromIso) return fromIso;
+    const parts = message.trim().split(/\s+/);
+    if (parts.length >= 1) return parts[0];
+    return 'unknown-host';
+}
+
+function sortLogsChronologically(logs) {
+    return [...logs].sort((a, b) => {
+        const ta = new Date(a.timestamp || 0).getTime();
+        const tb = new Date(b.timestamp || 0).getTime();
+        if (ta !== tb) return ta - tb;
+        return Number(a.event_id || 0) - Number(b.event_id || 0);
+    });
+}
+
+function resolveHostForLog(log, carryHost) {
+    const structured = structuredHostFromLog(log);
+    if (structured) return structured;
+
+    const kind = normalizedType(log);
+    const msg = (log.message || '').toLowerCase();
+    const fromSyslogLine = extractHostFromSyslogMessage(log.message || '');
+    if (kind === 'SYSLOG' && fromSyslogLine) return fromSyslogLine;
+
+    if (kind === 'FILE_DELETE' || msg.startsWith('deleted file:')) {
+        if (carryHost && carryHost !== 'unknown-host') return carryHost;
+    }
+
+    return extractHostFromMessage(log.message);
+}
+
+function renderHostOverview() {
+    if (!hostGrid || !hostOverviewSummary) return;
+    hostGrid.innerHTML = '';
+
+    const parsed = latestFetchedLogs.map(parseRawLog).filter(Boolean);
+    if (!parsed.length) {
+        hostOverviewSummary.textContent = 'No host data yet';
+        hostGrid.innerHTML = '<div class="host-card"><div class="host-title">No data</div><div class="host-metrics">Fetch logs to populate the host overview.</div></div>';
+        return;
+    }
+
+    const byHost = new Map();
+    let carryHost = 'unknown-host';
+    for (const log of sortLogsChronologically(parsed)) {
+        const host = resolveHostForLog(log, carryHost);
+        if (host && host !== 'unknown-host') carryHost = host;
+
+        if (!byHost.has(host)) {
+            byHost.set(host, { total: 0, fileDelete: 0, syslog: 0, usb: 0, lastSeen: '' });
+        }
+        const row = byHost.get(host);
+        row.total += 1;
+        const kind = normalizedType(log);
+        if (kind === 'FILE_DELETE') row.fileDelete += 1;
+        if (kind === 'SYSLOG') row.syslog += 1;
+        if (kind === 'USB') row.usb += 1;
+        if (!row.lastSeen || new Date(log.timestamp) > new Date(row.lastSeen)) row.lastSeen = log.timestamp;
+    }
+
+    hostOverviewSummary.textContent = `${byHost.size} host(s), ${parsed.length} event(s) in the current batch`;
+
+    for (const [host, m] of byHost.entries()) {
+        const card = document.createElement('div');
+        card.className = 'host-card';
+        card.innerHTML = `
+            <div class="host-title">${host}</div>
+            <div class="host-metrics">
+                Total: ${m.total}<br>
+                File deletes: ${m.fileDelete}<br>
+                Syslog: ${m.syslog}<br>
+                USB: ${m.usb}<br>
+                Last seen (UTC): ${m.lastSeen || 'n/a'}
+            </div>
+        `;
+        hostGrid.appendChild(card);
+    }
+}
+
+function renderFallbackMapState() {
+    if (!worldMap || !gatewayGrid || !distributionCidLabel) return;
+    distributionCidLabel.textContent = 'CID: not resolved yet';
+    worldMap.innerHTML = '';
+    gatewayGrid.innerHTML = '<div class="gateway-card">Resolve IPNS to probe gateway distribution.</div>';
+    const fallback = [
+        { x: 24, y: 40, name: 'US' },
+        { x: 48, y: 35, name: 'EU' },
+        { x: 76, y: 52, name: 'APAC' }
+    ];
+    fallback.forEach((r) => {
+        const dot = document.createElement('div');
+        dot.className = 'region-dot';
+        dot.style.background = '#3b3b3b';
+        dot.style.left = `${r.x}%`;
+        dot.style.top = `${r.y}%`;
+        dot.title = `${r.name} (waiting for probe)`;
+        worldMap.appendChild(dot);
+
+        const label = document.createElement('div');
+        label.className = 'region-label';
+        label.style.left = `${r.x}%`;
+        label.style.top = `${r.y}%`;
+        label.textContent = r.name;
+        worldMap.appendChild(label);
+    });
+}
+
+function renderIncidentTimeline() {
+    if (!timelineGrid || !timelineSummary) return;
+    timelineGrid.innerHTML = '';
+    const parsed = latestFetchedLogs.map(parseRawLog).filter(Boolean);
+    if (!parsed.length) {
+        timelineSummary.textContent = 'No incidents loaded';
+        timelineGrid.innerHTML = '<div class="timeline-card"><div class="timeline-title">No Data</div><div class="timeline-content">Fetch logs to build the timeline.</div></div>';
+        return;
+    }
+
+    const grouped = new Map();
+    parsed.forEach((log) => {
+        const key = (log.timestamp || '').slice(0, 16) || 'unknown-time';
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(log);
+    });
+    const orderedKeys = [...grouped.keys()].sort((a, b) => b.localeCompare(a)).slice(0, 8);
+    timelineSummary.textContent = `${parsed.length} events grouped into ${orderedKeys.length} time windows`;
+
+    orderedKeys.forEach((key) => {
+        const rows = grouped.get(key);
+        const deletes = rows.filter(r => normalizedType(r) === 'FILE_DELETE').length;
+        const syslog = rows.filter(r => normalizedType(r) === 'SYSLOG').length;
+        const usb = rows.filter(r => normalizedType(r) === 'USB').length;
+        const card = document.createElement('div');
+        card.className = 'timeline-card';
+        card.innerHTML = `
+            <div class="timeline-title">${key.replace('T', ' ')}</div>
+            <div class="timeline-content">
+                total: ${rows.length}<br>
+                file_delete: ${deletes}<br>
+                syslog: ${syslog}<br>
+                usb: ${usb}
+            </div>
+        `;
+        timelineGrid.appendChild(card);
+    });
+}
+
+async function loadDistribution(cid) {
+    if (!cid || !distributionCidLabel || !worldMap || !gatewayGrid) return;
+    distributionCidLabel.textContent = `CID: ${cid}`;
+    gatewayGrid.innerHTML = '<div class="gateway-card">Loading gateway probes...</div>';
+    worldMap.innerHTML = '';
+
+    try {
+        const res = await fetch(`/api/distribution?cid=${encodeURIComponent(cid)}`);
+        const payload = await res.json();
+        if (!payload.success) throw new Error(payload.error || 'Distribution fetch failed');
+
+        gatewayGrid.innerHTML = '';
+        payload.gateways.forEach((g) => {
+            const region = mapPointForGateway(g.gateway, cid);
+            const dot = document.createElement('div');
+            dot.className = `region-dot ${g.ok ? 'ok' : 'fail'}`;
+            dot.style.left = `${region.x}%`;
+            dot.style.top = `${region.y}%`;
+            dot.title = `${region.name}: ${g.gateway}`;
+            worldMap.appendChild(dot);
+
+            const label = document.createElement('div');
+            label.className = 'region-label';
+            label.style.left = `${region.x}%`;
+            label.style.top = `${region.y}%`;
+            label.textContent = region.name;
+            worldMap.appendChild(label);
+
+            const card = document.createElement('div');
+            card.className = 'gateway-card';
+            card.innerHTML = `
+                <div>${g.gateway}</div>
+                <div class="${g.ok ? 'status-ok' : 'status-fail'}">${g.ok ? 'reachable' : 'unreachable'} (${g.status || 'n/a'})</div>
+                <div>latency: ${g.latency_ms} ms | region: ${region.name}</div>
+            `;
+            gatewayGrid.appendChild(card);
+        });
+    } catch (error) {
+        gatewayGrid.innerHTML = `<div class="gateway-card status-fail">Distribution check failed: ${error.message}</div>`;
+    }
+}
+
 // Create log entry element
 function createLogEntry(log) {
-    log = JSON.parse(log)
+    log = parseRawLog(log);
+    if (!log) return null;
     const entry = document.createElement('div');
     entry.className = 'log-entry';
 
@@ -217,6 +636,10 @@ function showError(error) {
 // Resolve IPNS name
 async function resolveIpns() {
     if (isResolving) return;
+    if (Date.now() < resolveCooldownUntil) {
+        showStatus('Resolve is cooling down, please wait...', true);
+        return;
+    }
     isResolving = true;
     setFlowStep('resolve');
     setButtonLoading(resolveBtn, 'RESOLVING...', 'RESOLVE IPNS', true);
@@ -257,6 +680,8 @@ async function resolveIpns() {
         }
 
         // Show result
+        latestResolvedCid = resolvedCid;
+        loadDistribution(resolvedCid);
         const resultDiv = document.createElement('div');
         resultDiv.style.cssText = `
             padding: 1.5rem;
@@ -310,7 +735,11 @@ async function resolveIpns() {
             fetchLogs(resolvedCid);
         };
 
-        showStatus('IPNS resolved successfully');
+        if (data.stale) {
+            showStatus(data.warning || 'IPNS timed out; using cached CID', true);
+        } else {
+            showStatus('IPNS resolved successfully');
+        }
         setFlowStep('fetch');
     } catch (error) {
         // Hide loading
@@ -341,6 +770,7 @@ async function resolveIpns() {
         showStatus(error.message, true);
     } finally {
         isResolving = false;
+        resolveCooldownUntil = Date.now() + 1500;
         setButtonLoading(resolveBtn, 'RESOLVING...', 'RESOLVE IPNS', false);
     }
 }
@@ -392,97 +822,11 @@ async function fetchLogs(cid) {
 
         // Display logs in reverse order
         if (data.data && Array.isArray(data.data.logs)) {
-            const sortedLogs = [...data.data.logs].sort((a, b) => b.event_id - a.event_id);
-            
-            // Creating a separator for a new log group
-            const divider = document.createElement('div');
-            divider.style.cssText = `
-                border-top: 2px solid var(--primary);
-                margin: 2rem 0;
-                opacity: 0.5;
-            `;
-            logsOutput.insertBefore(divider, loadingOverlay);
-
-            // Creating a container for a new log group
-            const logsGroup = document.createElement('div');
-            logsGroup.className = 'logs-group';
-            logsGroup.style.marginBottom = '2rem';
-            
-            // Adding logs to the group in reverse order
-            for (let i = sortedLogs.length - 1; i >= 0; i--) {
-                const entry = createLogEntry(sortedLogs[i]);
-                logsGroup.appendChild(entry);
-            }
-            
-            // Adding a group before the upload overlay
-            logsOutput.insertBefore(logsGroup, loadingOverlay);
-
-            // Show navigation if exists
-            if (data.data.prev_cid) {
-                const navInfo = document.createElement('div');
-                navInfo.style.cssText = `
-                    color: var(--primary);
-                    padding: 1rem;
-                    border-top: 1px solid var(--primary);
-                    margin-top: 1rem;
-                    display: flex;
-                    justify-content: space-between;
-                    align-items: center;
-                    flex-wrap: wrap;
-                    gap: 1rem;
-                `;
-                
-                const cidText = document.createElement('div');
-                cidText.style.cssText = `
-                    font-family: 'Share Tech Mono', monospace;
-                    word-break: break-all;
-                    flex: 1;
-                `;
-                cidText.textContent = `Previous CID: ${data.data.prev_cid}`;
-                
-                const buttonGroup = document.createElement('div');
-                buttonGroup.style.cssText = `
-                    display: flex;
-                    gap: 1rem;
-                    align-items: center;
-                `;
-
-                const buttonStyles = `
-                    width: 150px;
-                    height: 36px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                `;
-
-                // Back button (Chain)
-                const chainButton = document.createElement('button');
-                chainButton.className = 'primary';
-                chainButton.style.cssText = buttonStyles;
-                chainButton.innerHTML = 'Chain Fetch';
-
-                // Checking if there are logs with ID 0
-                const hasZeroId = sortedLogs.some(log => {
-                    const parsedLog = JSON.parse(log);
-                    return parsedLog.event_id === 0;
-                });
-                if (hasZeroId) {
-                    chainButton.disabled = true;
-                    chainButton.style.opacity = '0.5';
-                    chainButton.style.cursor = 'not-allowed';
-                    chainButton.title = 'Reached the beginning of the chain';
-                } else {
-                    chainButton.onclick = () => {
-                        cidInput.value = data.data.prev_cid;
-                        fetchLogs(data.data.prev_cid);
-                    };
-                }
-
-                buttonGroup.appendChild(chainButton);
-                navInfo.appendChild(cidText);
-                navInfo.appendChild(buttonGroup);
-                logsOutput.insertBefore(navInfo, loadingOverlay);
-            }
+            latestFetchedLogs = [...data.data.logs];
+            latestPrevCid = data.data.prev_cid || '';
+            if (!latestResolvedCid) latestResolvedCid = cid;
+            loadDistribution(latestResolvedCid);
+            renderFetchedLogs();
         }
 
         showStatus('Logs fetched successfully');
@@ -911,13 +1255,49 @@ const configDescriptions = {
 // Updating the function of creating the configuration editor
 function createConfigEditor(config) {
     configEditor.innerHTML = '';
+    const sections = Object.entries(config);
+
+    const controls = document.createElement('div');
+    controls.style.cssText = 'display:flex; gap:0.8rem; margin-bottom:1rem;';
+
+    const expandAllBtn = document.createElement('button');
+    expandAllBtn.className = 'secondary';
+    expandAllBtn.style.width = 'auto';
+    expandAllBtn.textContent = 'Expand All';
+    expandAllBtn.addEventListener('click', () => {
+        configEditor.querySelectorAll('.config-section').forEach(sectionEl => {
+            const sectionContent = sectionEl.querySelector('.config-section-content');
+            if (sectionContent) sectionContent.style.display = 'block';
+            const icon = sectionEl.querySelector('.collapse-icon');
+            if (icon) icon.textContent = 'Hide';
+        });
+    });
+
+    const collapseAllBtn = document.createElement('button');
+    collapseAllBtn.className = 'secondary';
+    collapseAllBtn.style.width = 'auto';
+    collapseAllBtn.textContent = 'Collapse All';
+    collapseAllBtn.addEventListener('click', () => {
+        configEditor.querySelectorAll('.config-section').forEach(sectionEl => {
+            const sectionContent = sectionEl.querySelector('.config-section-content');
+            if (sectionContent) sectionContent.style.display = 'none';
+            const icon = sectionEl.querySelector('.collapse-icon');
+            if (icon) icon.textContent = 'Show';
+        });
+    });
+
+    controls.appendChild(expandAllBtn);
+    controls.appendChild(collapseAllBtn);
+    configEditor.appendChild(controls);
     
-    Object.entries(config).forEach(([section, settings]) => {
+    sections.forEach(([section, settings]) => {
         const sectionDiv = document.createElement('div');
-        sectionDiv.className = 'config-section collapsed';
+        sectionDiv.className = 'config-section';
+        sectionDiv.dataset.section = section;
         
         const header = document.createElement('div');
         header.className = 'config-section-header';
+        header.style.cursor = 'pointer';
         
         const titleGroup = document.createElement('div');
         titleGroup.className = 'title-group';
@@ -933,15 +1313,17 @@ function createConfigEditor(config) {
         titleGroup.appendChild(title);
         titleGroup.appendChild(desc);
         
-        const collapseIcon = document.createElement('span');
+        const collapseIcon = document.createElement('button');
+        collapseIcon.type = 'button';
         collapseIcon.className = 'collapse-icon';
-        collapseIcon.textContent = '▼';
+        collapseIcon.textContent = 'Hide';
         
         header.appendChild(titleGroup);
         header.appendChild(collapseIcon);
         
         const content = document.createElement('div');
         content.className = 'config-section-content';
+        content.style.display = 'block';
         
         const table = document.createElement('table');
         table.className = 'config-table';
@@ -1131,21 +1513,16 @@ function createConfigEditor(config) {
         
         content.appendChild(table);
         
-        header.addEventListener('click', () => {
-            sectionDiv.classList.toggle('collapsed');
-            collapseIcon.textContent = sectionDiv.classList.contains('collapsed') ? '▼' : '▲';
-            const collapsed = localStorage.getItem('collapsed-sections')?.split(',') || [];
-            if (sectionDiv.classList.contains('collapsed')) {
-                if (!collapsed.includes(section)) {
-                    collapsed.push(section);
-                }
-            } else {
-                const index = collapsed.indexOf(section);
-                if (index > -1) {
-                    collapsed.splice(index, 1);
-                }
-            }
-            localStorage.setItem('collapsed-sections', collapsed.join(','));
+        const toggleSection = () => {
+            const isHidden = content.style.display === 'none';
+            content.style.display = isHidden ? 'block' : 'none';
+            collapseIcon.textContent = isHidden ? 'Hide' : 'Show';
+        };
+
+        header.addEventListener('click', toggleSection);
+        collapseIcon.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleSection();
         });
         
         sectionDiv.appendChild(header);
@@ -1377,20 +1754,6 @@ function determineNetworkActivity(rxSpeed, txSpeed, savedMaxRx, savedMaxTx) {
         maxRx: formatNetworkSpeed(savedMaxRx),
         maxTx: formatNetworkSpeed(savedMaxTx)
     };
-}
-
-function formatNetworkSpeed(bytes, forceUnit = 'MB/s') {
-    if (bytes === 0) return '0.00';
-    
-    const k = 1024;
-    const units = {
-        'B/s': 1,
-        'KB/s': k,
-        'MB/s': k * k
-    };
-
-    const value = bytes / units[forceUnit];
-    return value.toFixed(2);
 }
 
 function determineNetworkQuality(rxSpeed, txSpeed) {
@@ -1865,19 +2228,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const refreshStatsBtn = document.getElementById('refresh-stats-btn');
     const systemStats = document.getElementById('system-stats');
 
+    // Extra direct binding for tabs (works even if delegation is blocked by overlay quirks).
+    document.querySelectorAll('.tab').forEach((tab) => {
+        tab.onclick = () => activateTab(tab.dataset.tab);
+    });
+
     // Event listeners
     fetchBtn.addEventListener('click', () => {
         const cid = cidInput.value.trim();
-        // Clearing all logs with a regular fetch
-        logsOutput.innerHTML = '';
-        const loadingOverlay = document.createElement('div');
-        loadingOverlay.id = 'loading-overlay';
-        loadingOverlay.className = 'loading-overlay';
-        loadingOverlay.innerHTML = `
-            <div class="loading-spinner"></div>
-            <div class="loading-text">Processing...</div>
-        `;
-        logsOutput.appendChild(loadingOverlay);
         fetchLogs(cid);
     });
 
@@ -1992,11 +2350,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     saveConfigBtn.addEventListener('click', saveConfig);
     refreshStatsBtn.addEventListener('click', loadStats);
+    logTypeFilter?.addEventListener('change', () => {
+        if (!latestFetchedLogs.length) return;
+        renderFetchedLogs();
+    });
+    logSortOrder?.addEventListener('change', () => {
+        if (!latestFetchedLogs.length) return;
+        renderFetchedLogs();
+    });
+    refreshDistributionBtn?.addEventListener('click', () => {
+        if (!latestResolvedCid) {
+            showStatus('Resolve IPNS first to visualize distribution', true);
+            return;
+        }
+        loadDistribution(latestResolvedCid);
+    });
 
     // Initial load
     loadKeys();
     loadConfig();
     initStats();
+    renderFallbackMapState();
+    renderIncidentTimeline();
+    activateTab('fetch');
     
     // Start the matrix animation
     setInterval(drawMatrix, 50);

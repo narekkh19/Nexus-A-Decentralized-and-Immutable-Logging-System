@@ -33,8 +33,14 @@ async function createApp() {
     }));
   }
 
-  // Static files
-  app.use(express.static(path.join(__dirname, config.server.static_dir)));
+  // Static files (disable cache to avoid stale UI script/state during demos)
+  app.use(express.static(path.join(__dirname, config.server.static_dir), {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('main.js') || filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      }
+    }
+  }));
 
   // API routes
   app.use(config.server.api_prefix, (await import('./routes/api.js')).default);

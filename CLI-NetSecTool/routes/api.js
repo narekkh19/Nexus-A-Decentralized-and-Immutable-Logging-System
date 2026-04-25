@@ -17,6 +17,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 let config = null;
+let lastResolvedCid = null;
+const distributionCache = new Map();
+const DISTRIBUTION_CACHE_TTL_MS = 45000;
+const resolveCache = new Map();
+const RESOLVE_CACHE_TTL_MS = 20000;
+const fetchCache = new Map();
+const FETCH_CACHE_TTL_MS = 60000;
+const inFlightResolve = new Map();
+const inFlightFetch = new Map();
 async function loadConfig() {
     if (!config) {
         config = await configService.get();
@@ -30,14 +39,163 @@ router.post('/fetch', async (req, res, next) => {
         const { cid, ipnsKey } = req.body;
         // For IPNS resolve mode: explicit ipnsKey, or default from configured key file.
         if (!cid) {
-            const resolvedCid = await ipfsService.resolveName((ipnsKey || '').trim());
-            return res.json({ success: true, data: resolvedCid });
+            const keyInput = (ipnsKey || '').trim();
+            const resolveKey = keyInput || '__default__';
+            const cachedResolve = resolveCache.get(resolveKey);
+            if (cachedResolve && (Date.now() - cachedResolve.createdAt) < RESOLVE_CACHE_TTL_MS) {
+                return res.json({
+                    success: true,
+                    data: cachedResolve.cid,
+                    stale: false,
+                    cached: true
+                });
+            }
+
+            if (inFlightResolve.has(resolveKey)) {
+                const sharedResolve = await inFlightResolve.get(resolveKey);
+                return res.json({ success: true, ...sharedResolve, shared: true });
+            }
+
+            const resolvePromise = (async () => {
+                let lastErr = null;
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    try {
+                        const resolvedCid = await ipfsService.resolveName(keyInput);
+                        lastResolvedCid = resolvedCid;
+                        resolveCache.set(resolveKey, { cid: resolvedCid, createdAt: Date.now() });
+                        return { data: resolvedCid, stale: false };
+                    } catch (err) {
+                        lastErr = err;
+                        if (attempt < 2) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                        }
+                    }
+                }
+
+                // Demo-safe fallback: if resolution is temporarily flaky, use the last known CID.
+                if (lastResolvedCid) {
+                    logger.warn('IPNS resolve failed, using cached CID fallback', {
+                        source: 'api',
+                        error: lastErr?.message,
+                        staleCid: lastResolvedCid
+                    });
+                    resolveCache.set(resolveKey, { cid: lastResolvedCid, createdAt: Date.now() });
+                    return {
+                        data: lastResolvedCid,
+                        stale: true,
+                        warning: 'IPNS resolve timed out; showing last known CID'
+                    };
+                }
+
+                throw lastErr || new Error('Failed to resolve IPNS');
+            })();
+            inFlightResolve.set(resolveKey, resolvePromise);
+
+            try {
+                const resolved = await resolvePromise;
+                return res.json({ success: true, ...resolved });
+            } catch (err) {
+                throw err;
+            } finally {
+                inFlightResolve.delete(resolveKey);
+            }
         }
 
         // For CID - fetch and decrypt data
-        const raw = await fetcherService.fetchFromIPFS(cid);
-        const decrypted = await decryptorService.decryptAndParse(raw);
-        res.json({ success: true, data: decrypted });
+        const fetchKey = cid.trim();
+        const cachedFetch = fetchCache.get(fetchKey);
+        if (cachedFetch && (Date.now() - cachedFetch.createdAt) < FETCH_CACHE_TTL_MS) {
+            return res.json({ success: true, data: cachedFetch.data, cached: true });
+        }
+
+        if (inFlightFetch.has(fetchKey)) {
+            const sharedData = await inFlightFetch.get(fetchKey);
+            return res.json({ success: true, data: sharedData, shared: true });
+        }
+
+        const fetchPromise = (async () => {
+            const raw = await fetcherService.fetchFromIPFS(fetchKey);
+            const decrypted = await decryptorService.decryptAndParse(raw);
+            fetchCache.set(fetchKey, { data: decrypted, createdAt: Date.now() });
+            if (fetchCache.size > 50) {
+                const firstKey = fetchCache.keys().next().value;
+                if (firstKey) fetchCache.delete(firstKey);
+            }
+            return decrypted;
+        })();
+        inFlightFetch.set(fetchKey, fetchPromise);
+
+        try {
+            const data = await fetchPromise;
+            res.json({ success: true, data, cached: false });
+        } finally {
+            inFlightFetch.delete(fetchKey);
+        }
+    } catch (err) {
+        next(err);
+    }
+});
+
+// IPFS distribution snapshot for presentation view
+router.get('/distribution', async (req, res, next) => {
+    try {
+        const cid = (req.query.cid || '').toString().trim();
+        if (!cid) {
+            return res.status(400).json({ success: false, error: 'cid query parameter is required' });
+        }
+
+        const cfg = await loadConfig();
+        const gateways = [
+            cfg.ipfs?.gateway_url,
+            ...(cfg.ipfs?.use_fallback_gateways ? (cfg.ipfs?.fallback_gateways || []) : [])
+        ].filter(Boolean);
+
+        const uniqueGateways = [...new Set(gateways)];
+        const timeoutMs = Math.min(Math.max(Number(cfg.ipfs?.timeout || 4000), 2000), 5000);
+
+        const cached = distributionCache.get(cid);
+        if (cached && (Date.now() - cached.createdAt) < DISTRIBUTION_CACHE_TTL_MS) {
+            return res.json({ success: true, cid, gateways: cached.gateways, cached: true });
+        }
+
+        const checks = await Promise.all(uniqueGateways.map(async (gateway) => {
+            const started = Date.now();
+            const url = `${gateway}${cid}`;
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+            try {
+                let response = await fetch(url, { method: 'HEAD', signal: controller.signal });
+                if (response.status === 405 || response.status === 501) {
+                    response = await fetch(url, { method: 'GET', signal: controller.signal });
+                }
+                try { response.body?.cancel?.(); } catch (_e) {}
+                return {
+                    gateway,
+                    ok: response.ok,
+                    status: response.status,
+                    latency_ms: Date.now() - started
+                };
+            } catch (e) {
+                return {
+                    gateway,
+                    ok: false,
+                    status: 0,
+                    latency_ms: Date.now() - started,
+                    error: e.message
+                };
+            } finally {
+                clearTimeout(timer);
+            }
+        }));
+
+        distributionCache.set(cid, { createdAt: Date.now(), gateways: checks });
+        if (distributionCache.size > 25) {
+            const firstKey = distributionCache.keys().next().value;
+            if (firstKey) distributionCache.delete(firstKey);
+        }
+
+        res.json({ success: true, cid, gateways: checks, cached: false });
     } catch (err) {
         next(err);
     }
