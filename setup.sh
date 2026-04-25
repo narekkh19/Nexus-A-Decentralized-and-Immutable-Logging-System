@@ -44,7 +44,7 @@ fi
 
 echo "[nexus] building RT-SysAgent"
 make -C "${AGENT_DIR}" agent reader config-generator >/dev/null
-"${AGENT_DIR}/bin/config_generator" >/dev/null || true
+(cd "${AGENT_DIR}" && ./bin/config_generator >/dev/null) || true
 
 echo "[nexus] installing UI dependencies"
 npm --prefix "${UI_DIR}" install >/dev/null

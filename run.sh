@@ -42,6 +42,13 @@ start_ipfs_if_needed() {
   exit 1
 }
 
+cleanup_stale_monitors() {
+  # Prevent conflicts with old hackathon copies running elsewhere.
+  pkill -f "RT-SysAgent/bin/reader" 2>/dev/null || true
+  pkill -f "RT-SysAgent/bin/agent" 2>/dev/null || true
+  sleep 1
+}
+
 start_agent() {
   local pid_file="${RUNTIME_DIR}/agent.pid"
   if is_running "${pid_file}"; then
@@ -54,7 +61,7 @@ start_agent() {
     echo "[nexus] sudo access is required for agent. Enter password once."
     sudo -v
   fi
-  nohup sudo "${AGENT_DIR}/bin/agent" >"${AGENT_LOG}" 2>&1 &
+  nohup bash -c "cd \"${AGENT_DIR}\" && exec stdbuf -oL -eL sudo ./bin/agent" >"${AGENT_LOG}" 2>&1 &
   echo $! > "${pid_file}"
 }
 
@@ -66,7 +73,7 @@ start_reader() {
   fi
 
   echo "[nexus] starting reader"
-  nohup "${AGENT_DIR}/bin/reader" >"${READER_LOG}" 2>&1 &
+  nohup bash -c "cd \"${AGENT_DIR}\" && exec stdbuf -oL -eL ./bin/reader" >"${READER_LOG}" 2>&1 &
   echo $! > "${pid_file}"
 }
 
@@ -88,6 +95,7 @@ fi
 "${ROOT_DIR}/setup.sh"
 
 start_ipfs_if_needed
+cleanup_stale_monitors
 start_agent
 start_reader
 start_ui

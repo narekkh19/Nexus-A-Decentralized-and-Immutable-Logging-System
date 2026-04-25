@@ -13,17 +13,17 @@
     "aes_iv_size": 12,
     "aes_key_size": 32,
     "aes_tag_size": 16,
-    "private_key_path": "keys/private_key.pem",
-    "public_key_path": "keys/public_key.pem",
+    "private_key_path": "/home/narek/Desktop/tmp/Nexus-A-Decentralized-and-Immutable-Logging-System/RT-SysAgent/keys/private_key.pem",
+    "public_key_path": "/home/narek/Desktop/tmp/Nexus-A-Decentralized-and-Immutable-Logging-System/RT-SysAgent/keys/public_key.pem",
     "rsa_key_size": 2048
   },
   "file_monitor": {
     "inotify_buffer_size": 8192,
     "inotify_timeout_ms": 500,
     "watch_paths": [
-      "~/Documents",
+      "/home/narek/Documents",
       "/etc",
-      "~/Desktop"
+      "/home/narek/Desktop"
     ]
   },
   "ipfs": {
@@ -36,7 +36,7 @@
   "logging": {
     "enable_console_logging": true,
     "enable_file_logging": true,
-    "log_file_path": "logs/rt-sysagent.log",
+    "log_file_path": "/home/narek/Desktop/tmp/Nexus-A-Decentralized-and-Immutable-Logging-System/RT-SysAgent/logs/rt-sysagent.log",
     "max_log_file_size_mb": 100,
     "max_log_files": 5
   },
@@ -240,7 +240,7 @@
       "kube-apiserver crash",
       "etcd connection failed"
     ],
-    "pattern_file_path": "tmp/pattern.txt"
+    "pattern_file_path": "/home/narek/Desktop/tmp/Nexus-A-Decentralized-and-Immutable-Logging-System/RT-SysAgent/tmp/pattern.txt"
   },
   "project": {
     "debug_mode": false,
@@ -258,7 +258,7 @@
   "shared_memory": {
     "create_if_not_exists": true,
     "file_permissions": 438,
-    "queue_file_path": "tmp/event_queue_shm"
+    "queue_file_path": "/home/narek/Desktop/tmp/Nexus-A-Decentralized-and-Immutable-Logging-System/RT-SysAgent/tmp/event_queue_shm"
   },
   "system_monitor": {
     "journald_path": "/var/log/journal",
