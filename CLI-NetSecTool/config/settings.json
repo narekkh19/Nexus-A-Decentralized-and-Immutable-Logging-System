@@ -55,7 +55,7 @@
     "max_retries": 4,
     "allow_offline": true,
     "allow_online": true,
-    "pin_enabled": false,
+    "pin_enabled": true,
     "pin_recursive": false,
     "name_resolve_timeout": "60s",
     "last_file_path": ".last_prev",
@@ -67,12 +67,14 @@
       "--routing=dhtclient"
     ],
     "repo_dir": ".ipfs",
-    "connection_mode": "gateway",
-    "gateway_url": "https://nftstorage.link/ipfs/",
+    "connection_mode": "api",
+    "ipns_key_name": "log-agent",
+    "prefer_local_kubo_cat": true,
+    "local_gateway_url": "http://127.0.0.1:8080/ipfs/",
+    "gateway_url": "https://dweb.link/ipfs/",
     "use_fallback_gateways": true,
     "fallback_gateways": [
-      "https://cloudflare-ipfs.com/ipfs/",
-      "https://dweb.link/ipfs/",
+      "https://nftstorage.link/ipfs/",
       "https://ipfs.io/ipfs/"
     ]
   },

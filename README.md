@@ -81,6 +81,8 @@ $ npm start             # launches interactive shell + web UI
 
 **⚡ In just 5 minutes, you'll have a production-ready cybersecurity platform monitoring your system in real-time!**
 
+For a **Linux publisher → Mac UI** demo (IPFS ports, swarm connect, fetch order), see [DEMO_STEPS.md](DEMO_STEPS.md).
+
 ---
 
 ## 📊 Features

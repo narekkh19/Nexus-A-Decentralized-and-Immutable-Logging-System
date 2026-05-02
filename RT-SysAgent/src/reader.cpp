@@ -152,6 +152,7 @@ void push_log_bucket_if_needed(bool force = false) {
         if (cid.empty()) {
             throw std::runtime_error("Failed to add encrypted log batch to IPFS after retries.");
         }
+        (void)fast_system("ipfs pin add " + cid + " 2>/dev/null");
         std::cout << "[IPFS] Pushed CID: " << cid << "\n";
 
         {

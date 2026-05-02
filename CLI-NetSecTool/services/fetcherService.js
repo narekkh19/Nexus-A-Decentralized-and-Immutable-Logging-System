@@ -1,6 +1,5 @@
 import fetch from 'node-fetch';
 import ipfsService from './ipfsService.js';
-import logger from './loggingService.js';
 import configService from './configService.js';
 
 class FetcherService {
@@ -33,65 +32,10 @@ class FetcherService {
     }
   }
 
-  // Fetch data from IPFS using gateway or local node
+  // Fetch data: unified in ipfsService.getData (ipfs cat → local gateway → public gateways).
   async fetchFromIPFS(cid) {
     if (!this.config) await this.loadConfig();
-
-    // Try gateways first in gateway mode
-    if (this.config.connection_mode === 'gateway') {
-      const errors = [];
-      
-      // Try main gateway
-      try {
-        return await this.fetchFromGateway(cid, this.config.gateway_url);
-      } catch (e) {
-        errors.push(`Main gateway error: ${e.message}`);
-      }
-
-      // Try fallback gateways
-      if (this.config.use_fallback_gateways) {
-        for (const gateway of this.config.fallback_gateways) {
-          try {
-            return await this.fetchFromGateway(cid, gateway);
-          } catch (e) {
-            errors.push(`Fallback gateway ${gateway} error: ${e.message}`);
-            continue;
-          }
-        }
-      }
-
-      // Try local IPFS if all gateways fail
-      try {
-        return await ipfsService.getData(cid);
-      } catch (err) {
-        errors.push(`Local IPFS error: ${err.message}`);
-        throw new Error(`All fetch attempts failed:\n${errors.join('\n')}`);
-      }
-    }
-    
-    // Try local IPFS first in API mode
-    try {
-      return await ipfsService.getData(cid);
-    } catch (err) {
-      logger.warn(`Local IPFS failed, trying gateways: ${err.message}`);
-      
-      // Try main gateway
-      try {
-        return await this.fetchFromGateway(cid, this.config.gateway_url);
-      } catch (e) {
-        // Try fallback gateways if main fails
-        if (this.config.use_fallback_gateways) {
-          for (const gateway of this.config.fallback_gateways) {
-            try {
-              return await this.fetchFromGateway(cid, gateway);
-            } catch (e) {
-              continue;
-            }
-          }
-        }
-        throw new Error(`Failed to fetch from IPFS: ${err.message}`);
-      }
-    }
+    return ipfsService.getData(cid);
   }
 
   // Resolve IPNS key to CID

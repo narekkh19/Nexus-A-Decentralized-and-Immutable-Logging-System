@@ -98,27 +98,58 @@ class IpfsService {
         return this.runWithRetry(args);
     }
 
-    // Get data from IPFS by CID
+    /**
+     * Fetch raw block via local Kubo CLI (same machine as daemon). Works when the block
+     * exists in the local repo; avoids public gateway 504/DNS issues.
+     */
+    async catCid(cid) {
+        const cidClean = String(cid).trim();
+        if (!cidClean) throw new Error('empty CID');
+        return this.runWithRetry(['cat', cidClean]);
+    }
+
+    /**
+     * Fetch by CID: local Kubo first (cat), then local gateway, then remote gateways.
+     * connection_mode: "api" = this full order; "gateway" = skip cat, use HTTP gateways only
+     * (for hosts without `ipfs` CLI). prefer_local_kubo_cat=false forces gateway-only.
+     */
     async getData(cid) {
         if (!this.config) await this.loadConfig();
+        const cidClean = String(cid).trim();
+        const errors = [];
+        const mode = this.config.connection_mode || 'api';
+        const preferCat = this.config.prefer_local_kubo_cat !== false;
+
+        logger.info('Fetching data from IPFS', { cid: cidClean, operation: 'fetch', connection_mode: mode });
+
+        if (mode !== 'gateway' && preferCat) {
+            try {
+                const text = await this.catCid(cidClean);
+                if (text && text.length > 0) {
+                    logger.info('Fetched via local ipfs cat', { cid: cidClean, size: text.length, operation: 'fetch' });
+                    return text;
+                }
+            } catch (err) {
+                errors.push(`ipfs cat: ${err.message}`);
+            }
+        }
+
         const gateways = [
+            this.config.local_gateway_url,
             this.config.gateway_url,
-            ...(this.config.use_fallback_gateways ? this.config.fallback_gateways : [])
+            ...(this.config.use_fallback_gateways ? (this.config.fallback_gateways || []) : [])
         ].filter(Boolean);
 
-        logger.info('Fetching data from IPFS', { cid, operation: 'fetch' });
-
-        const errors = [];
         for (const gateway of gateways) {
             for (let i = 0; i < this.config.max_retries; i++) {
                 try {
-                    const response = await fetchWithTimeout(`${gateway}${cid}`, this.config.timeout);
+                    const response = await fetchWithTimeout(`${gateway}${cidClean}`, this.config.timeout);
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}`);
                     }
                     const text = await response.text();
-                    logger.info('Successfully fetched data from gateway', {
-                        cid,
+                    logger.info('Fetched via HTTP gateway', {
+                        cid: cidClean,
                         gateway,
                         operation: 'fetch',
                         size: text.length
@@ -130,7 +161,7 @@ class IpfsService {
             }
         }
 
-        throw new Error(`Failed to fetch from all gateways: ${errors.join(' | ')}`);
+        throw new Error(`Failed to fetch CID: ${errors.join(' | ')}`);
     }
 
     // Resolve IPNS name to CID
